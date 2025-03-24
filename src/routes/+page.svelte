@@ -32,6 +32,8 @@
   let maxColumns = $state(10); // Default max for desktop
   let totalPages = $state(1);
   let currentPage = $state(1);
+  let isLoadingMore = $state(false);
+  let hasMorePages = $state(true);
   
   // Then add this to initialize browser-specific values
   $effect(() => {
@@ -94,68 +96,122 @@
     window.history.pushState({}, '', url.toString());
   }
   
-  // Function to fetch a single page of channel data
-  async function fetchChannelPage(page: number) {
-    const response = await fetch(`https://api.are.na/v2/channels/${channelSlug}/contents?page=${page}&per=100&direction=desc&sort=position&filter=Image`);
+  // Function to fetch channel metadata
+  async function fetchChannelMetadata() {
+    const response = await fetch(`https://api.are.na/v2/channels/${channelSlug}`);
     
     if (!response.ok) {
-      throw new Error(`Failed to fetch channel page ${page}: ${response.statusText}`);
+        throw new Error(`Failed to fetch channel metadata: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    console.log('Channel metadata:', {
+        length: data.length,
+        counts: data.counts
+    });
+    return data;
+  }
+  
+  // Function to fetch a single page of channel data
+  async function fetchChannelPage(page: number) {
+    const PER_PAGE = 100; // We can use 100 per page to reduce number of requests
+    const response = await fetch(
+        `https://api.are.na/v2/channels/${channelSlug}/contents?` + 
+        `page=${page}&per=${PER_PAGE}&direction=desc&sort=position`
+    );
+    
+    if (!response.ok) {
+        throw new Error(`Failed to fetch channel page ${page}: ${response.statusText}`);
     }
     
     return await response.json();
   }
   
-  // Modified fetchChannelData to randomize on load
+  // Add this function to check if we're near bottom
+  function isNearBottom(element: Element, threshold = 150) {
+    const { scrollTop, scrollHeight, clientHeight } = element;
+    return scrollHeight - (scrollTop + clientHeight) < threshold;
+  }
+
+  // Add scroll handler effect
+  $effect(() => {
+    const container = document.querySelector('.scroll-container');
+    if (!container) return;
+
+    const handleScroll = async () => {
+        if (
+            !isLoadingMore && 
+            hasMorePages && 
+            !loading && 
+            isNearBottom(container)
+        ) {
+            await loadNextPage();
+        }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  });
+
+  // Add function to load next page
+  async function loadNextPage() {
+    if (isLoadingMore || !hasMorePages) return;
+    
+    try {
+        isLoadingMore = true;
+        currentPage++;
+        
+        console.log(`Loading page ${currentPage} of ${totalPages}`);
+        const pageData = await fetchChannelPage(currentPage);
+        
+        const imageBlocks = pageData.contents.filter((block: ArenaBlock) => 
+            block.class === 'Image' || 
+            (block.attachment && block.attachment.content_type?.startsWith('image/'))
+        );
+        
+        contents = [...contents, ...imageBlocks];
+        console.log(`Loaded ${imageBlocks.length} more images. Total: ${contents.length}`);
+        
+        hasMorePages = currentPage < totalPages;
+    } catch (error) {
+        console.error('Error loading more images:', error);
+    } finally {
+        isLoadingMore = false;
+    }
+  }
+
+  // Modify the fetchChannelData function
   async function fetchChannelData() {
     loading = true;
     error = null;
     contents = [];
+    currentPage = 0;
+    hasMorePages = true;
     
     try {
-      // Update URL with current state
-      updateUrl();
-      
-      // First, get the initial page to determine total pages
-      const firstPage = await fetchChannelPage(1);
-      totalPages = firstPage.total_pages || 1;
-      currentPage = 1;
-      
-      // Add contents from first page (no need to filter as API only returns images)
-      contents = [...firstPage.contents];
-      
-      console.log(`Channel has ${totalPages} pages with ${contents.length} images on page 1`);
-      
-      // Fetch remaining pages if any
-      if (totalPages > 1) {
-        // Fetch pages sequentially to avoid rate limiting
-        for (let page = 2; page <= totalPages; page++) {
-          console.log(`Fetching page ${page} of ${totalPages}`);
-          try {
-            const pageData = await fetchChannelPage(page);
-            console.log(`Received ${pageData.contents.length} images from page ${page}`);
-            contents = [...contents, ...pageData.contents];
-          } catch (pageError) {
-            console.error(`Error fetching page ${page}:`, pageError);
-            // Continue with other pages even if one fails
-          }
-        }
-      }
-      
-      console.log(`Total images loaded: ${contents.length}`);
-      
-      // Randomize the contents after loading all pages
-      randomizeImages();
-      
+        updateUrl();
+        
+        // Get channel metadata
+        const metadata = await fetchChannelMetadata();
+        const totalItems = metadata.length;
+        const PER_PAGE = 100;
+        totalPages = Math.ceil(totalItems / PER_PAGE);
+        
+        console.log(`Channel has ${totalItems} total items across ${totalPages} pages`);
+        
+        // Load just the first page
+        await loadNextPage();
+        
     } catch (err) {
-      if (err instanceof Error) {
-        error = err.message;
-      } else {
-        error = 'An unknown error occurred';
-      }
-      console.error('Error fetching channel data:', err);
-      contents = [];
+        if (err instanceof Error) {
+            error = err.message;
+        } else {
+            error = 'An unknown error occurred';
+        }
+        console.error('Error fetching channel data:', err);
+        contents = [];
     } finally {
-      loading = false;
+        loading = false;
     }
   }
   
@@ -176,7 +232,6 @@
         
     if (columnCount < currentMax) {
       columnCount++;
-      console.log('New column count:', columnCount);
       // Force UI update by explicitly setting gridColumnsStyle
       gridColumnsStyle = `repeat(${columnCount}, 1fr)`;
     }
@@ -259,7 +314,7 @@
   </div>
   
   <!-- Main grid content -->
-  <div class="flex-1 overflow-y-auto overflow-x-hidden p-0 relative">
+  <div class="flex-1 overflow-y-auto overflow-x-hidden p-0 relative scroll-container">
     {#if loading}
       <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75">
         <div class="text-xl">Loading...</div>
@@ -292,6 +347,12 @@
           </div>
         {/each}
       </div>
+      
+      {#if isLoadingMore}
+        <div class="w-full p-4 text-center text-sm opacity-75 font-mono">
+          Loading more images...
+        </div>
+      {/if}
     {/if}
   </div>
 </div>
