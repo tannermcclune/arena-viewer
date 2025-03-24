@@ -34,6 +34,7 @@
   let currentPage = $state(1);
   let isLoadingMore = $state(false);
   let hasMorePages = $state(true);
+  let selectedImage = $state<ArenaBlock | null>(null);
   
   // Then add this to initialize browser-specific values
   $effect(() => {
@@ -280,6 +281,28 @@
   });
   
   // Remove meta viewport tag to disable zooming
+
+  function openImage(block: ArenaBlock) {
+    selectedImage = block;
+  }
+
+  function closeImage() {
+    selectedImage = null;
+  }
+
+  // Add escape key handler
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedImage) {
+        closeImage();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  });
 </script>
 
 <div class="flex flex-col h-screen bg-black text-white overflow-hidden">
@@ -336,14 +359,19 @@
       >
         {#each contents as block}
           <div class="aspect-square w-full overflow-hidden">
-            <img 
-              src={(block.image && block.image.display.url) || 
-                  (block.attachment && block.attachment.url) || 
-                  'https://via.placeholder.com/300'} 
-              alt={block.title || 'Arena Block'} 
-              class="w-full h-full object-cover"
-              loading="lazy"
-            />
+            <button 
+              class="w-full h-full p-0 m-0 border-0 bg-transparent"
+              onclick={() => openImage(block)}
+            >
+              <img 
+                src={(block.image && block.image.display.url) || 
+                    (block.attachment && block.attachment.url) || 
+                    'https://via.placeholder.com/300'} 
+                alt={block.title || 'Arena Block'} 
+                class="w-full h-full object-cover hover:opacity-90 transition-opacity"
+                loading="lazy"
+              />
+            </button>
           </div>
         {/each}
       </div>
@@ -353,6 +381,36 @@
           Loading more images...
         </div>
       {/if}
+    {/if}
+
+    <!-- Add modal markup -->
+    {#if selectedImage}
+      <div 
+        class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center"
+        onclick={closeImage}
+        onkeydown={(e) => e.key === 'Escape' && closeImage()}
+        tabindex="0"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div 
+          class="max-w-[90vw] max-h-[90vh] relative"
+          onclick={(e) => e.stopPropagation()}
+        >
+          <img 
+            src={(selectedImage.image && selectedImage.image.display.url) || 
+                (selectedImage.attachment && selectedImage.attachment.url) || 
+                'https://via.placeholder.com/300'} 
+            alt={selectedImage.title || 'Arena Block'} 
+            class="max-w-full max-h-[90vh] object-contain"
+          />
+          {#if selectedImage.title}
+            <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white p-2 text-sm">
+              {selectedImage.title}
+            </div>
+          {/if}
+        </div>
+      </div>
     {/if}
   </div>
 </div>
@@ -370,5 +428,10 @@
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
+  }
+
+  /* Add smooth transition for modal */
+  :global(.backdrop-blur-sm) {
+    transition: backdrop-filter 0.2s ease-out;
   }
 </style>
